@@ -1,0 +1,166 @@
+                        /*** RELAZIONE PROGETTO SISTEMI OPERATIVI 2017/2018 ***/
+/**
+*    A cura di:
+*        Bonicco Paolo, matricola 833708
+*        Bruno Federico, matricola 835438
+*        Fancellu Andrea, matricola 838776
+*/
+
+/**
+*Compilare con:
+*     make file1 fileA fileB
+*
+*Eseguire con:
+*    ./file1 fileA fileB
+*/
+
+/**
+*Il progetto è articolato in 4 file:
+*
+*    util.h - contiene variabili, funzioni e strutture utilizzate
+*    file1.c - il gestore, crea i processi, li uccide, gestisce i segnali
+*    fileA.c - processi generati di tipo A
+*    fileB.c - processi generati di tipo B
+*
+*
+*
+*Descrizione semafori utilizzati:
+*
+*    (s_id , 0) --> Viene utilizzato per l'accesso in memoria condivisa,
+*    in modo che quando un processo va a legger eun valore in memoria condivisa
+*    è sicuro che quel valore non sta per essere modificato e quindi evita una
+*    inconsistenza del dato
+*
+*    (s_id , 1) --> Viene utilizzato per sbloccare la funzione father ogni
+*    birth_death secondi
+*
+*    (s_id , 2) --> Viene utilizzato per la sincronizzazione tra il gestore e
+*    i vari processi. Compare nella funzione father e in fileB, questo serve per
+*    far si che il gestore (funzione father) non termini un processo B mentre è in una
+*    sezione critica (ad esempio sta aspettando la risposta di un A).
+*    Non è stato necessario sincronizzare anche A con il semaforo perchè è già
+*    stato gestito con i la msg_rcv e msg_snd. B quando contatta un A tiene riservato
+*    il semafoto fino a quando A non l'ho contatta di nuovo, così che il gestore
+*    non possa uccidere nessuno.
+*
+*    (s_id , 3) --> Sincronizza la creazione dei figli nella prima parte della
+*    funzione father.
+*
+*
+*
+*Segue un elenco di tutte le funzioni impiegate.
+*
+*Funzioni matematiche:
+*
+*    max - prende in input 2 interi e restituisce in output il loro massimo
+*
+*    mcd - prende in input 2 interi e restituisce in output il loro mcd
+*
+*
+*Funzioni per i semafori:
+*
+*    initSemAvaiable - inizializza un semaforo a 1, rendendolo subito accessibile
+*
+*    initSemInUse - inizializza un semaforo a 0, rendendolo inaccessibile
+*
+*    reserveSem - blocca il semaforo, impedendo accesso a sezione critica del codice
+*
+*    releaseSem - sblocca il semaforo, consentendo accesso
+*
+*
+*Funzioni per l'inizializzazione delle variabili in single_data dei processi creati:
+*
+*    creation - inizializza i valori in single_data per i processi iniziali e per quelli creati
+*               ogni birth_death secondi. Prende in input la posizione in cui inserire
+*               la struct single_data del processo da inizializzare in vec e il pid del processo
+*               chiamante
+*
+*    creationNewSons - inizializza i valori in single_data per i processi scaturiti dall'accoppiamento
+*                      di 2 job di tipo A e B. Prende in input i primi due parametri di creation e in
+*                      più l'indice dei 2 processi genitori A e B.
+*
+*
+*Funzioni per la stampa dei dati sui processi:
+*
+*   printPopulation - stampa le informazioni di tutti i processi generati fino a quel momento
+*
+*   printStats - stampa alcune statistiche al termine della simulazione
+*
+*
+*Funzione per deallocare tutte le IPC:
+*
+*   detach - dealloca tutte le IPC utilizzate, con le opportune syscall
+*
+*
+*Funzioni handler di segnali:
+*
+*    SIGALRM_handler - handler di SIGALRM, aggiorna l'utente sullo stato della simulazione stampando
+*                      informazioni sui processi ogni birth_death secondi. Alla prima esecuzione, e solo alla prima,
+*                      esegue anche una fork che che crea un processo che invoca la funzione endSimulation.
+*                      All'ultima esecuzione (my_data->end == 1) esegue la wait dei figli e la dealllocazione di
+*                      tutte le strutture IPC utilizzate (memoria condivisa, semafori, code di messaggi), stampa
+*                      delle statistche sulla simulazione chiamando printStats e termina con una exit.
+*
+*    SIGINT_handler - handler del segnale SIGINT, gestisce la pressione dei tasti 'ctrl + C' da terminale,
+*                     deallocando tutte le strutture IPC utilizzate, richiamando la funzione detach, dopo avere
+*                     inviato SIGKILL a tutti i processi e averne atteso la terminazione.
+*
+*
+*Funzione per la terminazione:
+*
+*    endSimulation - prende in input un intero che rappresenta i secondi.
+*                    Attende per sim_time secondi con una sleep in modo da eseguire quando l'utente
+*                    decide che la simulazione deve terminare, dopo di che uccide tutti i processi con segnale SIGKILL
+*                    e termina con una exit, dopo aver settato my_data->end a 1.
+*
+*
+*Funzione contenente il corpo del processo gestore:
+*
+*    father - principalmente scansiona array vec alla ricerca di processi che si sono accoppiati, immettendo 2 figli per
+*             coppia nella popolazione (inizializzati con creationNewSons). Uccide un processo ogni birth_death secondi,
+*             immettendone un altro (inizializzato con creation). Prende in input 2 puntatori a vettori di char, arg usato
+*             per passare indici alle funzioni di Creazione e id di IPC ai processi generati, argv usato per passare il
+*             nome del programma da eseguire con execve, "fileA" o "fileB"
+*
+*
+*
+*Inizio della simulazione:
+*
+*    La simulazione inizia creando init_people processi tramite fork, e inizializzando i loro parametri in shared memory
+*    tramite la funzione creation. Successivamente si esegue una exceve per per ogni processo delegando l'esecuzione di
+*    quest'ultimo rispettivamente a fileA o fileB, a seconda che il campo type di quel processo sia 'A' o 'B'.
+*
+*
+*
+*Comunucazione tra processi:
+*
+*per far comunicare i processi abbiamo deciso di adottare le message queue, nel seguente modo:
+*
+*    Il processo di tipo B, inizialmente, esegue un ciclo alla ricerca del processo A migliore
+*    con cui accoppiarsi. B riterrà migliore il processo che gli garantirà il mcd maggiore
+*    tra il suo genoma e quello degli A. Successivamente B invierà al processo A migliore, utilizzando come tipo l'indice di A,
+*    il suo indice, per poi bloccarsi in attesa di risposta su una receive.
+*    A questo punto spostiamo l'attenzione su A, il quale esegue subito una receive, in attesa del messaggio contenente
+*    l'indice di B. Una volta ricevuto, esegue un ciclo anche esso alla ricerca del B migliore, adottando il medesimo
+*    criterio di B. Se il B che l'ha contattato è lo stesso individuato come migliore, o il suo genoma è
+*    multiplo di quello di A, allora il processo acconsente ad accoppiarsi. Sovrascrive in memoria condivisa le variabilii
+*    per settare a morti i due processi per segnalare al gestore l'accoppiamento e invia il suo indice come messaggio, per poi
+*    terminare. Se il B che l'ha contattato non rispetta i criteri necessarri, invia come messaggio -1. A questo punto B, se la risposta di A
+*    è positiva, dopo aver sovrascritto le opportune variabili come A in shared memory, esegue una exit, se è negativa torna a
+*    cercare un processo con cui accoppiarsi. È presente un sistema per gestire i rifiuti da parte di A, la variabile dim_range
+*    viene incrementata a ogni rifiuto, quando raggiunge il numero di rifiuti massimo stabilito, A si accoppierà col primo B
+*    che lo contatta.
+*
+*
+*
+*Creazione dei nuovi figli dei processi:
+*
+*    la creazione dei nuovi figli è delegata al gestore che, nella funzione father, esegue un ciclo per verificare se dei
+*    processi A e B si sono accoppiati, tramite opportuna variabile i_partner impostata precedentemente. Se vengono trovati
+*    il gestore esegue una fork per genitore e inizializza i campi dei nuovi figli con la funzione
+*    creationNewSons. Poi esegue una execve per entrambi, immettendoli effettivamente nella popolazione con le stesse modalità
+*    di quelli creati all'inizio.
+*
+*
+*
+*/
